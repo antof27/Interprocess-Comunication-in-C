@@ -1,211 +1,214 @@
+#define _GNU_SOURCE
+#include<unistd.h>
+#include<sys/wait.h>
+#include<wait.h>
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
-#include<unistd.h>
-#include<sys/wait.h>
+#include<ctype.h>
 #include<sys/ipc.h>
-#include<sys/msg.h>
+#include<sys/sem.h>
+#include<sys/shm.h>
 
-#define MSG_SIZE_COMPARER sizeof(msg_comparer) - sizeof(long)
-#define MSG_SIZE_FATHER sizeof(msg_father) - sizeof(long)
-#define MAX_WORD_LEN 50
 
-typedef struct{
-    long type;
-    char s1[MAX_WORD_LEN];
-    char s2[MAX_WORD_LEN];
-    unsigned int res; 
-    char done; 
+#define SHM_SIZE sizeof(shm_data)
+#define MAX_LEN 64
 
-}msg_comparer;
-
+enum{P, R, W};
 
 typedef struct{
-    long type; 
-    char word[MAX_WORD_LEN];
-    char done; 
-}msg_father; 
+    char word[MAX_LEN];
+    unsigned done; 
+}shm_data;
 
+int WAIT(int sem_des, int num_semaforo){
+    struct sembuf operazioni[1] = {{num_semaforo,-1,0}};
+    return semop(sem_des, operazioni, 1);
+    }
 
-int init_queue(){
-    int queue; 
-    if((queue = msgget(IPC_PRIVATE, IPC_CREAT | 0600)) == -1){
-        perror("msgget");
+int SIGNAL(int sem_des, int num_semaforo){
+    struct sembuf operazioni[1] = {{num_semaforo,+1,0}};
+    return semop(sem_des, operazioni, 1);
+    }
+
+int init_sem(){
+    int sem_des; 
+
+    if((sem_des = semget(IPC_PRIVATE, 3, IPC_CREAT | 0600)) == -1){
+        perror("semget");
         exit(1);
     }
-    return queue; 
-}
 
-int line_counter(char*path){
-    int n_lines = 0; 
-    FILE *f; 
-
-if((f = fopen(path, "r")) == NULL){
-    perror("fopen");
-    exit(1);
-}
-
-char buffer[MAX_WORD_LEN];
-
-    while(1){
-    if(fgets(buffer, MAX_WORD_LEN, f)){
-        n_lines++;
-        } else break; 
+    if(semctl(sem_des, R, SETVAL, 0) == -1){
+        perror("setval reader");
+        exit(1);
     }
 
-    return n_lines; 
+     if(semctl(sem_des, P, SETVAL, 0) == -1){
+        perror("setval reader");
+        exit(1);
+    }
+
+     if(semctl(sem_des, W, SETVAL, 0) == -1){
+        perror("setval reader");
+        exit(1);
+    }
+
+    return sem_des; 
 }
 
-void swap(char**a, char**b){
-    char* tmp = *a; 
-    *a = *b; 
-    *b = tmp; 
+
+int init_shm(){
+    int shm_des; 
+    if((shm_des = shmget(IPC_PRIVATE, SHM_SIZE, IPC_CREAT | 0600)) == -1){
+        perror("shmget");
+        exit(1);
+    }
+
+    return shm_des; 
 }
 
-void sorter(int queue, char*path){
-    FILE *f; 
-    msg_comparer m_comparer; 
-    msg_father m_father; 
+void reader(int sem_des, int shm_des, char*path){
+    FILE*f; 
+    shm_data* data;
 
-    m_comparer.type = 1; 
-    m_father.type = 2; 
+    if((data = (shm_data*)shmat(shm_des, NULL, 0)) == (shm_data*)-1){
+        perror("Attach");
+        exit(1);
+    }
 
+    if(path){
     if((f = fopen(path, "r")) == NULL){
-        perror("fopen");
+        perror("fopen"); 
         exit(1);
+        }
+    }
+    
+    data->done = 0; 
+    if(path){
+    while(fgets(data->word, MAX_LEN, f)){
+        SIGNAL(sem_des, P);
+        WAIT(sem_des, R);
+        }
+    }
+    else{
+        while(1){
+            printf("[R] Leggo da tastiera, 'exit' per terminare\n");
+            fgets(data->word, MAX_LEN, stdin);
+            if(strcasestr(data->word, "exit") != NULL)
+                break; 
+            
+                SIGNAL(sem_des, P);
+                WAIT(sem_des, R);
+            
+        }
     }
 
-    int n_lines = line_counter(path);
-    char**buffer = malloc(n_lines*sizeof(char*));
+    data->done = 1; 
+    SIGNAL(sem_des, P);
+    SIGNAL(sem_des, W);
 
-    for(int i = 0; i<n_lines; i++)
-        buffer[i] = (char*)malloc(MAX_WORD_LEN+1);
-    
-        int k = 0; 
-        while(fgets(buffer[k], MAX_WORD_LEN, f)){    
-            buffer[k][strcspn(buffer[k], "\n")] = '\0';
-            k++;
-            }
-
-        m_comparer.done = 0; 
-
-        for(int i = 0; i<n_lines; i++)
-            for(int j = 0; j<n_lines-i-1; j++){
-
-                sprintf(m_comparer.s1, "%s", buffer[j]);
-                sprintf(m_comparer.s2, "%s", buffer[j+1]);
-                m_comparer.res = 0; 
-
-                if((msgsnd(queue, &m_comparer, MSG_SIZE_COMPARER, 0)) == -1){
-                    perror("msgsnd");
-                    exit(1);
-                }
-
-            
-                if((msgrcv(queue, &m_comparer, MSG_SIZE_COMPARER, 1, 0)) == -1){
-                    perror("msgrcv");
-                    exit(1);
-                }
-
-                if(m_comparer.res){      
-                    swap(&buffer[j], &buffer[j+1]);        
-                    }
-
-            }
-
-            m_comparer.done = 1;
-            if((msgsnd(queue, &m_comparer, MSG_SIZE_COMPARER, 0)) == -1){
-                    perror("msgsnd");
-                    exit(1);
-                }
-
-
-            
-            
-            for(int i = 0; i<n_lines; i++){
-                sprintf(m_father.word, "%s", buffer[i]);
-                m_father.done = 0; 
-                if((msgsnd(queue, &m_father, MSG_SIZE_FATHER, 0)) == -1){
-                    perror("msgsnd");
-                    exit(1);
-                }
-                
-            // printf("--- Stringa inviata : %s\n", m_father.word);
-            }
-
-            m_father.done = 1; 
-            if((msgsnd(queue, &m_father, MSG_SIZE_FATHER, 0)) == -1){
-                    perror("msgsnd");
-                    exit(1);
-                }
-    free(buffer);
-    fclose(0);
+    fclose(f);
     exit(0);
 }
 
+int palindrome(char*word){
+    int len = strlen(word);
 
+    for(int i = 0, j = len-1; i<=j; i++, j--){
+        if(i == j) return 1; 
+        else if(tolower(word[i]) != tolower(word[j])){
+            
+            return 0;  
+        }
+    }
+    return 1; 
+}
 
-void comparer(int queue){
-    msg_comparer m_comparer; 
-     
+void father(int sem_des, int shm_des){
+    shm_data* data;
+
+    if((data = (shm_data*)shmat(shm_des, NULL, 0)) == (shm_data*)-1){
+        perror("Attach");
+        exit(1);
+    } 
+    char buffer[MAX_LEN];
+
     while(1){
+        WAIT(sem_des, P);
+        if(data->done) break; 
 
-        memset(&m_comparer, 0, sizeof(msg_comparer));
+        sprintf(buffer, "%s", data->word);
+        buffer[strlen(buffer)-1] = '\0';
+        if(palindrome(buffer)){
+            SIGNAL(sem_des, W);
+        } else SIGNAL(sem_des, R);
 
-        if((msgrcv(queue, &m_comparer, MSG_SIZE_COMPARER, 1, 0)) == -1){
-            perror("msgrcv");
+    }
+
+    exit(0);
+}
+
+void writer(int sem_des, int shm_des, char*path){
+    FILE*f; 
+    shm_data* data;
+
+    if((data = (shm_data*)shmat(shm_des, NULL, 0)) == (shm_data*)-1){
+        perror("Attach");
+        exit(1);
+    } 
+
+    if(path){
+        if((f = fopen(path, "w")) == NULL){
+            perror("Creazione file scrittura");
             exit(1);
             }
+       }   
 
-        if(m_comparer.done) break; 
+    while(1){
+        WAIT(sem_des, W);
+        if(data->done) break;
+        if(path)
+            fputs(data->word, f);
+        else printf("[W] palindroma : %s\n", data->word);
 
-        //printf("Stringhe da comparare : %s e %s\n", m_comparer.s1, m_comparer.s2);
-
-        if(strcasecmp(m_comparer.s1, m_comparer.s2) > 0)
-            m_comparer.res = 1; 
-        
-        else m_comparer.res = 0;
-
-        if((msgsnd(queue, &m_comparer, MSG_SIZE_COMPARER, 0)) == -1){
-            perror("msgsnd");
-            exit(1);
-        } 
+        SIGNAL(sem_des, R);
     }
 
-exit(0);
+    fclose(f);
+    exit(0);
+
 }
+
 
 int main(int argc, char**argv){
-    
-    if(argc != 2){
-        fprintf(stderr, "Usage : %s <file1>", argv[0]);
+    if(argc<2){
+        perror("Argument invalid input");
         exit(1);
     }
 
-    int queue = init_queue();
-    msg_father m_father; 
+    int sem_des = init_sem();
+    int shm_des = init_shm(); 
 
-    if(!fork()) sorter(queue, argv[1]);
-
-    if(!fork()) comparer(queue);
-    
-    while(1){
-
-    if((msgrcv(queue, &m_father, MSG_SIZE_FATHER, 2, 0)) == -1){
-        perror("msgrcv, questa?"); 
-        exit(1);
+    if(!fork()){
+        if(argc > 2)
+            writer(sem_des, shm_des, argv[2]);
+        else writer(sem_des, shm_des, NULL);
         }
 
-    
-    if(m_father.done) break; 
-    
-    if(m_father.word != NULL)
-    printf("%s\n", m_father.word);
 
-    }
+    if(!fork()){
+        if(argc > 2)
+            reader(sem_des, shm_des, argv[1]);
+        else
+            reader(sem_des, shm_des, NULL);
+        }
     
-    msgctl(queue, IPC_RMID, NULL);
+    father(sem_des, shm_des);
+
+    wait(NULL);
+    wait(NULL);
+
+    shmctl(sem_des, IPC_RMID, NULL);
+    semctl(sem_des, 0, IPC_RMID, 0);
 }
-
-
-
