@@ -1,3 +1,7 @@
+/*
+Coded by Anto 
+*/
+
 #define _GNU_SOURCE
 #include<wait.h>
 #include<sys/wait.h>
