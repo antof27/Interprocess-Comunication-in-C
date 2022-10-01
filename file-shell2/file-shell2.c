@@ -1,7 +1,3 @@
-/*
-Coded by Anto 
-*/
-
 #include<sys/stat.h>
 #include<dirent.h>
 #include<string.h>
@@ -12,7 +8,8 @@ Coded by Anto
 #include<sys/msg.h>
 #include<sys/types.h>
 #include<sys/wait.h>
-
+#include<fcntl.h>
+#include<sys/mman.h>
 
 #define MSG_SIZE sizeof(msg) - sizeof(long)
 #define LINE_SIZE 1024
@@ -93,7 +90,6 @@ void parent(int queue, char*path, unsigned n_directory){
         m.type = id;  
         m.done = 0; 
 
-        printf("Comando : %s, id : %u\n", m.command, m.id);
         
             if(msgsnd(queue, &m, MSG_SIZE, 0) == -1){
                 perror("msgsnd");
@@ -113,8 +109,10 @@ void directory_process(int queue, char*path, unsigned id){
     struct stat statbuff; 
     DIR*d; 
     struct dirent* dirent;
-    FILE*f;
+    int file;
     char buffer_occurrences[LINE_SIZE];
+    char*map; 
+    int size; 
    
     while(1){
         unsigned n_regular = 0;
@@ -148,23 +146,30 @@ void directory_process(int queue, char*path, unsigned id){
             n_regular++;
         
             if(!strcmp(dirent->d_name, m.file)){
-                if((f = fopen(tmp, "r")) == NULL){
+                if((file = open(tmp, O_RDONLY)) == -1){
                     perror("file not opened");
+                    exit(1);
+                    }
+
+                size = statbuff.st_size;
+
+                if((map = (char*)mmap(NULL, size, PROT_READ, MAP_SHARED, file, 0 )) == (char*)-1){
+                    perror("mmap");
                     exit(1);
                     }
                    
                 char crctr;
-
-                while(fgets(buffer_occurrences, LINE_SIZE, f)){
+                
+                    sprintf(buffer_occurrences,"%s", map);
+                   
                     for(int i = 0; i < strlen(buffer_occurrences); i++){
                         crctr = buffer_occurrences[i]; 
                         crctr = tolower(crctr);
-            
+
                         if(crctr == m.character)
                             n_occurrences++;
                             
                         }
-                    }
                 }
             }
         }
@@ -176,7 +181,7 @@ void directory_process(int queue, char*path, unsigned id){
             else printf("%d occurrences \n", n_occurrences);
 
     }
-
+    munmap(map, size);
     closedir(d);
     exit(0);
 }
