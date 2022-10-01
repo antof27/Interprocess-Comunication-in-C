@@ -20,8 +20,8 @@ typedef struct{
     unsigned id; 
     char character;
     char file[LINE_SIZE]; 
+    char result[LINE_SIZE];
     char done;
-
 }msg; 
 
 int init_queue(){
@@ -97,6 +97,17 @@ void parent(int queue, char*path, unsigned n_directory){
                 }
             
             usleep(2000);
+
+
+            //riceviamo
+            if(msgrcv(queue, &m, MSG_SIZE, m.id, 0) == -1){
+                perror("msgrcv");
+                exit(1);
+                } 
+            else{
+                printf("%s", m.result);
+                continue;
+                }
         
         }else printf("Comando non corretto, riprova\n");
     }
@@ -174,12 +185,21 @@ void directory_process(int queue, char*path, unsigned id){
             }
         }
 
-        if(strstr(m.command, "num-files") != NULL){
-            printf("%d file\n", n_regular);
-            } else if(strstr(m.command, "total-size") != NULL)
-                printf("%d byte\n", n_size);
-            else printf("%d occurrences \n", n_occurrences);
+        if(strstr(m.command, "num-files") != NULL)
+            sprintf(m.result, "%d file\n", n_regular);
+            
+        else if(strstr(m.command, "total-size") != NULL){
+            sprintf(m.result, "%d byte\n", n_size);
+            printf("n_size : %d\n", n_size);
+            }
 
+        else sprintf(m.result, "%d occurrences \n", n_occurrences);
+
+        if(msgsnd(queue, &m, MSG_SIZE, 0) == -1){
+            perror("msgsnd");
+            exit(1);
+            }               
+                
     }
     munmap(map, size);
     closedir(d);
